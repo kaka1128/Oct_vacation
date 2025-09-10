@@ -1,0 +1,525 @@
+<div class="max-w-full rounded-lg border bg-white p-4 shadow-sm">
+  <h2 class="text-xl font-bold text-center mb-4">2025年10月 團隊排假計畫</h2>
+  
+  <div class="mb-4 flex flex-wrap justify-between items-center">
+    <div class="text-sm text-gray-600 mb-2 flex flex-wrap gap-2">
+      <div><span class="inline-block w-3 h-3 bg-red-100 border border-red-200 mr-1"></span> 國定假日</div>
+      <div><span class="inline-block w-3 h-3 bg-gray-100 mr-1"></span> 週末</div>
+      <div><span class="inline-block w-3 h-3 bg-amber-100 border border-amber-200 mr-1"></span> 連假</div>
+    </div>
+    <div class="flex space-x-2">
+      <button id="saveBtn" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">儲存資料</button>
+      <button id="exportBtn" class="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700">匯出為CSV</button>
+      <button id="refreshBtn" class="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700">重新整理資料</button>
+    </div>
+  </div>
+  
+  <div id="loadingIndicator" class="text-center my-4 hidden">
+    <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-700"></div>
+    <p class="mt-2">正在載入資料...</p>
+  </div>
+  
+  <div class="overflow-x-auto">
+    <table class="min-w-full border-collapse">
+      <thead>
+        <tr class="bg-gray-100">
+          <th class="sticky left-0 z-10 bg-gray-100 border p-2 text-center">日期</th>
+          <th class="border p-2 text-center">KC</th>
+          <th class="border p-2 text-center">FangChia</th>
+          <th class="border p-2 text-center">Charlie</th>
+          <th class="border p-2 text-center">Julie</th>
+          <th class="border p-2 text-center">Johanna</th>
+          <th class="border p-2 text-center">Lilian</th>
+          <th class="border p-2 text-center">Lavine</th>
+        </tr>
+      </thead>
+      <tbody id="calendarBody">
+        <!-- 日曆內容將由JavaScript動態生成 -->
+      </tbody>
+    </table>
+  </div>
+  
+  <div class="mt-4 flex justify-between items-center">
+    <div id="statusMsg" class="text-sm"></div>
+    <button id="submitBtn" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">提交排假計畫</button>
+  </div>
+</div>
+
+<script>
+  // SharePoint 網站設定
+  const siteUrl = "https://您的組織.sharepoint.com/sites/您的網站"; // 請替換為您的 SharePoint 網站 URL
+  const listName = "TeamVacationData";
+  
+  // 定義團隊成員
+  const members = ['KC', 'FangChia', 'Charlie', 'Julie', 'Johanna', 'Lilian', 'Lavine'];
+  
+  // 定義2025年10月的日期資料
+  const october2025 = [];
+  const weekdays = ['日', '一', '二', '三', '四', '五', '六'];
+  
+  // 定義國定假日和連假
+  const holidays = {
+    '4': '中秋節連假',
+    '5': '中秋節連假',
+    '6': '中秋節連假',
+    '10': '國慶日連假',
+    '11': '國慶日連假',
+    '12': '國慶日連假',
+    '24': '光復節連假',
+    '25': '光復節連假',
+    '26': '光復節連假'
+  };
+  
+  // 主要國定假日（顯示特殊標記）
+  const mainHolidays = {
+    '4': '中秋節',
+    '10': '國慶日',
+    '24': '光復節'
+  };
+  
+  // 生成10月所有日期
+  for (let day = 1; day <= 31; day++) {
+    // 2025年10月1日是星期三
+    const date = new Date(2025, 9, day);
+    const weekday = weekdays[date.getDay()];
+    const isWeekend = date.getDay() === 0 || date.getDay() === 6;
+    const isHoliday = holidays[day] !== undefined;
+    const isMainHoliday = mainHolidays[day] !== undefined;
+    
+    october2025.push({
+      day,
+      weekday,
+      isWeekend,
+      isHoliday,
+      isMainHoliday,
+      holidayName: holidays[day],
+      mainHolidayName: mainHolidays[day]
+    });
+  }
+  
+  // 獲取 SharePoint 表單摘要值 (FormDigestValue)
+  async function getFormDigest() {
+    try {
+      const response = await fetch(`${siteUrl}/_api/contextinfo`, {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json;odata=verbose'
+        },
+        credentials: 'include'
+      });
+      
+      const data = await response.json();
+      return data.d.GetContextWebInformation.FormDigestValue;
+    } catch (error) {
+      console.error('獲取 FormDigest 失敗:', error);
+      showStatus('無法連接到 SharePoint，請確認您已登入', 'error');
+      return null;
+    }
+  }
+  
+  // 從 SharePoint 讀取休假資料
+  async function loadVacationData() {
+    showLoading(true);
+    
+    try {
+      const response = await fetch(`${siteUrl}/_api/web/lists/getbytitle('${listName}')/items?$select=Member,Date,Status&$filter=Status eq '休假'`, {
+        headers: {
+          'Accept': 'application/json;odata=verbose'
+        },
+        credentials: 'include'
+      });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP 錯誤: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      const vacationData = {};
+      
+      // 初始化成員資料
+      members.forEach(member => {
+        vacationData[member] = [];
+      });
+      
+      // 處理 API 返回的資料
+      if (data.d && data.d.results) {
+        data.d.results.forEach(item => {
+          const member = item.Member;
+          const dateObj = new Date(item.Date);
+          
+          // 僅處理 2025 年 10 月的資料
+          if (dateObj.getFullYear() === 2025 && dateObj.getMonth() === 9) {
+            const day = dateObj.getDate().toString();
+            
+            if (vacationData[member] && !vacationData[member].includes(day)) {
+              vacationData[member].push(day);
+            }
+          }
+        });
+      }
+      
+      // 自動加入連假日
+      members.forEach(member => {
+        Object.keys(holidays).forEach(day => {
+          if (!vacationData[member].includes(day)) {
+            vacationData[member].push(day);
+          }
+        });
+      });
+      
+      // 更新 UI
+      updateCheckboxes(vacationData);
+      showStatus('資料已從 SharePoint 載入', 'success');
+    } catch (error) {
+      console.error('載入資料失敗:', error);
+      showStatus('載入資料失敗，請重試', 'error');
+      
+      // 嘗試從本地儲存載入備份資料
+      loadLocalBackup();
+    } finally {
+      showLoading(false);
+    }
+  }
+  
+  // 從本地儲存載入備份資料
+  function loadLocalBackup() {
+    const savedData = localStorage.getItem('teamVacationOct2025');
+    
+    if (savedData) {
+      const vacationData = JSON.parse(savedData);
+      updateCheckboxes(vacationData);
+      showStatus('已從本地備份載入資料', 'warning');
+    }
+  }
+  
+  // 更新 UI 上的勾選框
+  function updateCheckboxes(vacationData) {
+    // 先清除所有勾選
+    document.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
+      checkbox.checked = false;
+    });
+    
+    // 根據資料更新勾選狀態
+    Object.keys(vacationData).forEach(member => {
+      vacationData[member].forEach(day => {
+        const checkbox = document.getElementById(`day${day}-${member}`);
+        if (checkbox) checkbox.checked = true;
+      });
+    });
+  }
+  
+  // 儲存資料到 SharePoint
+  async function saveToSharePoint() {
+    showLoading(true);
+    
+    try {
+      // 收集所有勾選資料
+      const vacationData = {};
+      members.forEach(member => {
+        vacationData[member] = [];
+        
+        // 收集勾選的休假日
+        document.querySelectorAll(`input[data-member="${member}"]:checked`).forEach(checkbox => {
+          vacationData[member].push(checkbox.dataset.day);
+        });
+        
+        // 自動加入連假日
+        Object.keys(holidays).forEach(day => {
+          if (!vacationData[member].includes(day)) {
+            vacationData[member].push(day);
+          }
+        });
+      });
+      
+      // 獲取 FormDigest
+      const formDigest = await getFormDigest();
+      if (!formDigest) {
+        throw new Error('無法獲取 FormDigest');
+      }
+      
+      // 先刪除現有資料 (為了簡化，實際應用可能需要更複雜的邏輯)
+      await deleteExistingData(formDigest);
+      
+      // 批次新增資料
+      const batchPromises = [];
+      
+      members.forEach(member => {
+        vacationData[member].forEach(day => {
+          // 建立日期物件 (2025年10月)
+          const dateStr = `2025-10-${day.padStart(2, '0')}T00:00:00Z`;
+          
+          const promise = fetch(`${siteUrl}/_api/web/lists/getbytitle('${listName}')/items`, {
+            method: 'POST',
+            headers: {
+              'Accept': 'application/json;odata=verbose',
+              'Content-Type': 'application/json;odata=verbose',
+              'X-RequestDigest': formDigest
+            },
+            body: JSON.stringify({
+              '__metadata': { 'type': `SP.Data.${listName}ListItem` },
+              'Title': `${member} - 2025/10/${day}`,
+              'Member': member,
+              'Date': dateStr,
+              'Status': '休假'
+            }),
+            credentials: 'include'
+          });
+          
+          batchPromises.push(promise);
+        });
+      });
+      
+      // 等待所有請求完成
+      await Promise.all(batchPromises);
+      
+      // 儲存本地備份
+      localStorage.setItem('teamVacationOct2025', JSON.stringify(vacationData));
+      
+      showStatus('資料已成功儲存至 SharePoint', 'success');
+    } catch (error) {
+      console.error('儲存資料失敗:', error);
+      showStatus('儲存至 SharePoint 失敗，已備份至本機', 'error');
+      
+      // 儲存到本地作為備份
+      saveToLocalStorage();
+    } finally {
+      showLoading(false);
+    }
+  }
+  
+  // 刪除現有資料
+  async function deleteExistingData(formDigest) {
+    try {
+      // 獲取 2025 年 10 月的所有項目
+      const response = await fetch(`${siteUrl}/_api/web/lists/getbytitle('${listName}')/items?$select=Id,Date&$filter=month(Date) eq 10 and year(Date) eq 2025`, {
+        headers: {
+          'Accept': 'application/json;odata=verbose'
+        },
+        credentials: 'include'
+      });
+      
+      const data = await response.json();
+      
+      if (data.d && data.d.results) {
+        const deletePromises = data.d.results.map(item => {
+          return fetch(`${siteUrl}/_api/web/lists/getbytitle('${listName}')/items(${item.Id})`, {
+            method: 'POST',
+            headers: {
+              'Accept': 'application/json;odata=verbose',
+              'X-RequestDigest': formDigest,
+              'IF-MATCH': '*',
+              'X-HTTP-Method': 'DELETE'
+            },
+            credentials: 'include'
+          });
+        });
+        
+        await Promise.all(deletePromises);
+      }
+    } catch (error) {
+      console.error('刪除現有資料失敗:', error);
+      // 繼續執行，不中斷流程
+    }
+  }
+  
+  // 儲存資料到本地儲存
+  function saveToLocalStorage() {
+    const vacationData = {};
+    
+    members.forEach(member => {
+      vacationData[member] = [];
+      
+      document.querySelectorAll(`input[data-member="${member}"]:checked`).forEach(checkbox => {
+        vacationData[member].push(checkbox.dataset.day);
+      });
+      
+      // 自動加入連假日
+      Object.keys(holidays).forEach(day => {
+        if (!vacationData[member].includes(day)) {
+          vacationData[member].push(day);
+        }
+      });
+    });
+    
+    localStorage.setItem('teamVacationOct2025', JSON.stringify(vacationData));
+    
+    showStatus('資料已儲存至本機', 'success');
+  }
+  
+  // 顯示狀態訊息
+  function showStatus(message, type) {
+    const statusMsg = document.getElementById('statusMsg');
+    statusMsg.textContent = message;
+    
+    // 根據類型設定顏色
+    switch (type) {
+      case 'success':
+        statusMsg.className = 'text-sm text-green-600';
+        break;
+      case 'error':
+        statusMsg.className = 'text-sm text-red-600';
+        break;
+      case 'warning':
+        statusMsg.className = 'text-sm text-amber-600';
+        break;
+      default:
+        statusMsg.className = 'text-sm text-gray-600';
+    }
+    
+    // 自動清除訊息
+    setTimeout(() => {
+      statusMsg.textContent = '';
+    }, 5000);
+  }
+  
+  // 顯示/隱藏載入指示器
+  function showLoading(show) {
+    const loadingIndicator = document.getElementById('loadingIndicator');
+    if (show) {
+      loadingIndicator.classList.remove('hidden');
+    } else {
+      loadingIndicator.classList.add('hidden');
+    }
+  }
+  
+  // 匯出為CSV檔案
+  function exportToCSV() {
+    // 添加BOM以確保Excel正確處理UTF-8
+    let csvContent = '\uFEFF';
+    
+    // 添加標題行
+    csvContent += '日期,' + members.join(',') + '\r\n';
+    
+    // 添加每一天的數據
+    october2025.forEach(date => {
+      let dateLabel = '';
+      
+      // 格式化日期標籤
+      if (date.isMainHoliday) {
+        dateLabel = `10/${date.day}(${date.weekday}) ${date.mainHolidayName}`;
+      } else if (date.isHoliday) {
+        dateLabel = `10/${date.day}(${date.weekday}) ${date.holidayName}`;
+      } else {
+        dateLabel = `10/${date.day}(${date.weekday})`;
+      }
+      
+      let row = dateLabel;
+      
+      // 添加每個成員的休假狀態
+      members.forEach(member => {
+        if (date.isHoliday) {
+          row += ',放假';
+        } else {
+          const checkbox = document.getElementById(`day${date.day}-${member}`);
+          row += ',' + (checkbox && checkbox.checked ? '休假' : '');
+        }
+      });
+      
+      csvContent += row + '\r\n';
+    });
+    
+    // 創建Blob對象
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    
+    // 創建下載連結
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    
+    link.setAttribute('href', url);
+    link.setAttribute('download', '團隊排假計畫_2025年10月.csv');
+    link.style.visibility = 'hidden';
+    
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    showStatus('CSV檔案已成功匯出', 'success');
+  }
+  
+  // 生成日曆表格
+  function generateCalendar() {
+    const calendarBody = document.getElementById('calendarBody');
+    
+    october2025.forEach(date => {
+      const row = document.createElement('tr');
+      
+      // 設定週末和假日的背景色
+      if (date.isHoliday) {
+        row.className = 'bg-amber-50';
+      } else if (date.isWeekend) {
+        row.className = 'bg-gray-100';
+      }
+      
+      // 日期欄
+      const dateCell = document.createElement('td');
+      
+      // 設定日期欄的樣式
+      if (date.isHoliday) {
+        dateCell.className = 'sticky left-0 z-10 border p-2 text-center font-bold text-red-600';
+        dateCell.style.backgroundColor = '#FEF3C7'; // amber-50
+      } else if (date.isWeekend) {
+        dateCell.className = 'sticky left-0 z-10 border p-2 text-center font-medium text-red-500';
+        dateCell.style.backgroundColor = '#F3F4F6'; // gray-100
+      } else {
+        dateCell.className = 'sticky left-0 z-10 border p-2 text-center font-medium';
+        dateCell.style.backgroundColor = '#F9FAFB'; // gray-50
+      }
+      
+      // 設定日期文字
+      let dateText = `10/${date.day} (${date.weekday})`;
+      if (date.isMainHoliday) {
+        dateText += ` ${date.mainHolidayName}`;
+      } else if (date.isHoliday) {
+        dateText += ` ${date.holidayName}`;
+      }
+      dateCell.textContent = dateText;
+      row.appendChild(dateCell);
+      
+      // 為每個團隊成員創建勾選欄或放假標記
+      members.forEach(member => {
+        const cell = document.createElement('td');
+        cell.className = 'border p-2 text-center';
+        
+        if (date.isHoliday) {
+          // 連假日顯示"放假"文字
+          const holidayText = document.createElement('span');
+          holidayText.textContent = '放假';
+          holidayText.className = 'text-red-500 font-medium';
+          cell.appendChild(holidayText);
+        } else {
+          // 非連假日顯示勾選框
+          const checkbox = document.createElement('input');
+          checkbox.type = 'checkbox';
+          checkbox.className = 'w-5 h-5';
+          checkbox.dataset.day = date.day;
+          checkbox.dataset.member = member;
+          checkbox.id = `day${date.day}-${member}`;
+          
+          cell.appendChild(checkbox);
+        }
+        
+        row.appendChild(cell);
+      });
+      
+      calendarBody.appendChild(row);
+    });
+  }
+  
+  // 初始化
+  function initialize() {
+    // 生成日曆
+    generateCalendar();
+    
+    // 從 SharePoint 載入資料
+    loadVacationData();
+    
+    // 設定按鈕事件
+    document.getElementById('saveBtn').addEventListener('click', saveToLocalStorage);
+    document.getElementById('exportBtn').addEventListener('click', exportToCSV);
+    document.getElementById('refreshBtn').addEventListener('click', loadVacationData);
+    document.getElementById('submitBtn').addEventListener('click', saveToSharePoint);
+  }
+  
+  // 頁面載入時初始化
+  document.addEventListener('DOMContentLoaded', initialize);
+</script>
